@@ -1,0 +1,484 @@
+---
+title: "Projek Data Science"
+author: "123220129_133_165"
+date: "2024-11-30"
+output: pdf_document
+---
+
+## Mengidentifikasi Jam Sibuk pada lalu lintas di New York City
+
+1. Import library dan dataset yang kita dapatkan!
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(nnet)
+library(tibble)
+library(fuzzyjoin)
+library(factoextra)
+library(bigstatsr)
+library(cluster)
+library(fpc)
+library(shiny)
+library(leaflet)
+library(tidyr)
+library(clusterCrit)
+ traffictdata <- read.csv("Traffic_Volume_Counts.csv",check.names = FALSE)
+ view(traffictdata)
+```
+
+2. Menghapus nilai NA dan value yang kosong
+```{r}
+data <- traffictdata %>%
+  drop_na() %>%  
+  filter(if_all(everything(), ~ . != ""))  
+data
+
+```
+
+3. Mengubah Nama Kolom 
+```{r}
+data <- data %>%
+  rename(RoadwayName = `Roadway Name`)
+
+```
+
+```{r}
+# Menghapus kolom ID, SegmentID, From, To, Direction
+data <- data %>%
+  select(-ID, -SegmentID, -From, -To, -Direction)
+data
+```
+
+```{r}
+# Normalisasi nama jalan
+data <- data %>%
+  mutate(
+    RoadwayName = str_replace_all(RoadwayName, "\\bST\\b", "STREET"),  # Ubah 'ST' jadi 'STREET'
+    RoadwayName = str_replace_all(RoadwayName, "\\bAVE\\b", "AVENUE"), # Ubah 'AVE' jadi 'AVENUE'
+    RoadwayName = str_replace_all(RoadwayName, "\\bRD\\b", "ROAD"),    # Ubah 'RD' jadi 'ROAD'
+    RoadwayName = toupper(RoadwayName)                                # Konversi ke huruf kapital
+  )
+
+# Daftar nama jalan standar
+standard_road_names <- data.frame(
+  StandardName = c(
+    "1st AVENUE", "2nd AVENUE", "3rd AVENUE", "4th AVENUE", "5th AVENUE", 
+    "103rd STREET", "108 STREET", "110th STREET", "120th STREET", "125th STREET",
+    "HYLAN BLVD", "RICHMOND AVENUE", "VICTORY BOULEVARD", "ATLANTIC AVENUE", 
+    "BAY STREET", "MAIN STREET", "BROADWAY", "FIFTH AVENUE", 
+    "MADISON AVENUE", "PARK AVENUE", "LEXINGTON AVENUE", 
+    "AMSTERDAM AVENUE", "COLUMBUS AVENUE", "WEST END AVENUE", 
+    "RIVERSIDE DRIVE", "CONCOURSE", "MORRIS AVENUE", 
+    "KINGS HIGHWAY", "FLATBUSH AVENUE", "NOSTRAND AVENUE", 
+    "QUEENS BOULEVARD", "JAMAICA AVENUE", "METROPOLITAN AVENUE", 
+    "ROOSEVELT AVENUE", "NORTHERN BOULEVARD", "UNION TURNPIKE", 
+    "CROSS BAY BOULEVARD", "WOODHAVEN BOULEVARD", 
+    "GRAND CONCOURSE", "BEDFORD AVENUE", "OCEAN PARKWAY", 
+    "SURF AVENUE", "NEPTUNE AVENUE", "AVENUE U", "AVENUE J", 
+    "EASTERN PARKWAY", "LIBERTY AVENUE", "MYRTLE AVENUE", 
+    "BROADWAY JUNCTION", "GREENPOINT AVENUE", "BUSHWICK AVENUE", 
+    "MARCY AVENUE", "KENT AVENUE", "MANHATTAN AVENUE", 
+    "DEKALB AVENUE", "FULTON STREET", "ADAMS STREET", 
+    "WALL STREET", "CHAMBERS STREET", "CANAL STREET", 
+    "HOUSTON STREET", "BLEECKER STREET", "SPRING STREET", 
+    "PRINCE STREET", "14th STREET", "23rd STREET", "42nd STREET", 
+    "57th STREET", "72nd STREET", "86th STREET", "96th STREET", 
+    "110th STREET", "125th STREET", "145th STREET", 
+    "WESTCHESTER AVENUE", "CASTLE HILL AVENUE", "WHITE PLAINS ROAD", 
+    "BRUCKNER BOULEVARD", "THROGS NECK EXPRESSWAY", 
+    "CROSS BRONX EXPRESSWAY", "BRONX RIVER PARKWAY", 
+    "PELHAM PARKWAY", "CITY ISLAND ROAD", "FRANKLIN AVENUE", "RICHMOND ROAD",
+    "AMBOY ROAD", "MURDOCK AVENUE", "SHERIDAN AVENUE", "FDR DRIVE", 
+    "BROOKLYN QUEENS EXPRESSWAY", "EAST 170 MAIN ROAD"
+
+  )
+)
+
+# Gabungin dataset dengan daftar nama jalan standar pake fuzzy matching
+data_cleaned <- stringdist_left_join(
+  data, 
+  standard_road_names, 
+  by = c("RoadwayName" = "StandardName"), 
+  max_dist = 2
+) %>% 
+  mutate(RoadwayName = ifelse(!is.na(StandardName), StandardName, RoadwayName)) %>% 
+  select(-StandardName)
+
+# cek naama jalan setelah cleaning
+unique_names <- unique(data_cleaned$RoadwayName)
+print(unique_names)
+
+data_cleaned
+
+length(unique(data$RoadwayName))
+length(unique(data_cleaned$RoadwayName))
+missing_values <- setdiff(unique(data$RoadwayName), unique(data_cleaned$RoadwayName))
+missing_values
+
+# Normalisasi nama jalan
+data <- data_cleaned %>%
+  mutate(
+    RoadwayName = str_replace_all(RoadwayName, "\\b(\\d+)TH\\b", "\\1"), # Hapus "TH" setelah angka
+    RoadwayName = str_replace_all(RoadwayName, "\\b(\\d+)ST\\b", "\\1"), # Ubah 'ST' setelah angka
+    RoadwayName = str_replace_all(RoadwayName, "\\bAVE\\b", "AVENUE"),   # Ubah 'AVE' jadi 'AVENUE'
+    RoadwayName = str_replace_all(RoadwayName, "\\b(\\d+)RD\\b", "\\1"), # Hapus 'RD'setelah angka
+    RoadwayName = toupper(RoadwayName)                                   # Konversi ke huruf kapital
+  )
+
+data_cleaned %>% distinct(RoadwayName)
+
+
+
+```
+## Scalling / Normalisasi Data     
+```{r}
+clean_data_scaled <- data_cleaned %>%
+  mutate(across(`12:00-1:00AM`:`11:00-12:00AM`, scale))
+
+# Menampilkan hasil scaling
+head(clean_data_scaled)
+```
+
+
+```{r}
+view(clean_data_scaled)
+glimpse(clean_data_scaled)
+```
+
+
+
+## Visualisasi Data
+```{r}
+
+ data_long <- clean_data_scaled %>%
+   pivot_longer(
+     cols = "12:00-1:00AM":"11:00-12:00AM",
+     names_to = "Time",
+     values_to = "Volume"
+   )
+
+data_long
+
+
+```
+
+```{r}
+
+# Take a 10% random sample of the data
+set.seed(123)
+data_sample <- data_long[sample(nrow(data_long), 0.01 * nrow(data_long)), ]
+
+# Determine the optimal number of clusters using the sample
+fviz_nbclust(data_sample$Volume, kmeans, method = "silhouette") +
+  labs(title = "Determining the Optimal Number of Clusters")
+```
+```{r}
+data_sample
+```
+
+
+
+```{r}
+# Run K-means clustering with 4 clusters
+km_model <- kmeans(data_long$Volume, centers = 4, nstart = 25)
+
+# Add the cluster assignments to the data frame
+data_long$Cluster <- km_model$cluster
+```
+
+```{r}
+data_long
+```
+
+```{r}
+# Mengelompokkan data berdasarkan jam dan menghitung total volume
+hourly_volume <- data_cleaned %>%
+  group_by(TimeHour) %>%
+  summarise(total_volume = sum(TrafficVolume, na.rm = TRUE)) %>%
+  arrange(desc(total_volume))
+
+# Menampilkan jam dengan volume tertinggi
+hourly_volume
+
+# Mengelompokkan data berdasarkan jam dan menghitung rata-rata volume
+hourly_volume <- data_cleaned %>%
+  group_by(TimeHour) %>%
+  summarise(avg_volume = mean(TrafficVolume, na.rm = TRUE)) %>%
+  arrange(desc(avg_volume))
+
+# Menampilkan rata-rata volume lalu lintas per jam
+hourly_volume
+
+```
+```{r}
+# Library yang diperlukan
+library(ggplot2)
+
+# Membuat bar chart pola lalu lintas berdasarkan waktu
+ggplot(data = hourly_volume, aes(x = TimeHour, y = total_volume)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "darkblue") +
+  labs(
+    title = "Pola Lalu Lintas Berdasarkan Waktu",
+    x = "Jam (Time Hour)",
+    y = "Total Volume Lalu Lintas"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+    
+```
+
+
+
+```{r}
+glimpse(data_)
+```
+
+
+```{r}
+# Take a 10% random sample of the data
+set.seed(123)
+data_sample <- data_long[sample(nrow(data_long), 0.01 * nrow(data_long)), ]
+
+# Calculate the Silhouette score using the sample
+silhouette_score <- silhouette(data_sample$Cluster, dist(data_sample$Volume))
+print(paste0("Silhouette Score: ", round(mean(silhouette_score[, 3]), 2)))
+
+db_index <- intCriteria(as.matrix(data_sample$Volume), as.integer(data_sample$Cluster), c("Davies_Bouldin"))
+print(paste0("Davies-Bouldin Index: ", round(db_index[[1]], 2)))
+```
+```{r}
+data_long
+glimpse(data_long$Cluster)
+data_long%>%filter(Cluster == 2)
+
+data_long = data_long %>% mutate(
+  Time = case_when(
+    Time == "12:00-1:00AM" ~ 0,
+    Time == "1:00-2:00AM" ~ 1,
+    Time == "2:00-3:00AM" ~ 2,
+    Time == "3:00-4:00AM" ~ 3,
+    Time == "4:00-5:00AM" ~ 4,
+    Time == "5:00-6:00AM" ~ 5,
+    Time == "6:00-7:00AM" ~ 6,
+    Time == "7:00-8:00AM" ~ 7,
+    Time == "8:00-9:00AM" ~ 8,
+    Time == "9:00-10:00AM" ~ 9,
+    Time == "10:00-11:00AM" ~ 10,
+    Time == "11:00-12:00PM" ~ 11,
+    Time == "12:00-1:00PM" ~ 12,
+    Time == "1:00-2:00PM" ~ 13,
+    Time == "2:00-3:00PM" ~ 14,
+    Time == "3:00-4:00PM" ~ 15,
+    Time == "4:00-5:00PM" ~ 16,
+    Time == "5:00-6:00PM" ~ 17,
+    Time == "6:00-7:00PM" ~ 18,
+    Time == "7:00-8:00PM" ~ 19,
+    Time == "8:00-9:00PM" ~ 20,
+    Time == "9:00-10:00PM" ~ 21,
+    Time == "10:00-11:00PM" ~ 22,
+    Time == "11:00-12:00AM" ~ 23,
+  )
+)
+```
+
+```{r}
+# Membuat plot clustering
+ggplot(data_long, aes(x = Volume, y = Cluster, color = as.factor(Cluster))) +
+  geom_point(alpha = 0.6) +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = "K-means Clustering (k=4)",
+       x = "Volume",
+       y = "Data Points",
+       color = "Cluster") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    legend.position = "right"
+  )
+
+# Alternatif visualisasi dengan density plot
+ggplot(data_long, aes(x = Volume, fill = as.factor(Cluster))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Distribution of Clusters",
+       x = "Volume",
+       y = "Density",
+       fill = "Cluster") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    legend.position = "right"
+  )
+
+# Box plot untuk melihat distribusi cluster
+ggplot(data_long, aes(x = as.factor(Cluster), y = Volume, fill = as.factor(Cluster))) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Distribution of Volume by Cluster",
+       x = "Cluster",
+       y = "Volume",
+       fill = "Cluster") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    legend.position = "right"
+  )
+
+# Statistik ringkasan untuk setiap cluster
+cluster_summary <- data_long %>%
+  group_by(Cluster) %>%
+  summarise(
+    n = n(),
+    mean_volume = mean(Volume),
+    sd_volume = sd(Volume),
+    min_volume = min(Volume),
+    max_volume = max(Volume)
+  )
+
+print(cluster_summary)
+```
+
+```{r}
+# Time-series plot untuk volume lalu lintas berdasarkan waktu
+ggplot(data_long, aes(x = Time, y = Volume, color = as.factor(Cluster))) +
+  geom_line(size = 1, alpha = 0.7) +  # Menggunakan garis untuk menggambarkan pola waktu
+  scale_color_brewer(palette = "Set1") +  # Palet warna untuk cluster
+  labs(
+    title = "Time-Series Plot of Traffic Volume by Cluster",
+    x = "Time",
+    y = "Traffic Volume",
+    color = "Cluster"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    legend.position = "right"
+  )
+
+
+# Scatter plot untuk volume lalu lintas berdasarkan waktu
+ggplot(data_long, aes(x = Time, y = Volume, color = as.factor(Cluster))) +
+  geom_point(alpha = 0.6, size = 2) +  # Menggunakan titik untuk menggambarkan data
+  scale_color_brewer(palette = "Set1") +  # Palet warna untuk cluster
+  labs(
+    title = "Scatter Plot of Traffic Volume by Cluster",
+    x = "Time",
+    y = "Traffic Volume",
+    color = "Cluster"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    legend.position = "right"
+  )
+
+```
+#NYC Street Centerline (CSCL).geojson
+
+```{r}
+library(shiny)
+library(sf)
+library(dplyr)
+library(leaflet)
+library(ggplot2)
+
+# Data GeoJSON untuk peta zona urbanisasi
+zones_geojson <- st_read("NYC Street Centerline (CSCL).geojson") # Ubah dengan file GeoJSON zona urbanisasi
+
+# Data dummy untuk lalu lintas (berdasarkan zona)
+set.seed(123)
+traffic_data <- data.frame(
+  Zone = sample(c("Zone A", "Zone B", "Zone C", "Zone D"), 240, replace = TRUE),
+  TimeHour = rep(0:23, each = 10),
+  TrafficVolume = rnorm(240, mean = 2000, sd = 500)
+)
+
+# Gabungkan volume lalu lintas dengan zona
+zones_traffic <- zones_geojson %>%
+  mutate(Zone = sample(c("Zone A", "Zone B", "Zone C", "Zone D"), nrow(zones_geojson), replace = TRUE)) %>%
+  left_join(
+    traffic_data %>% 
+      group_by(Zone) %>% 
+      summarize(AverageVolume = mean(TrafficVolume)),
+    by = "Zone"
+  )
+
+# UI
+ui <- fluidPage(
+  titlePanel("Traffic Analysis by Zone"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("time_range", "Select Time Range:",
+                  min = 0, max = 23, value = c(10, 14), step = 1),
+      actionButton("update", "Update"),
+      downloadButton("downloadPlot", "Download Plot")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Traffic Map", leafletOutput("trafficMap")),
+        tabPanel("Traffic Chart", plotOutput("trafficChart"))
+      )
+    )
+  )
+)
+
+# Server
+server <- function(input, output) {
+  
+  filtered_data <- reactive({
+    traffic_data %>%
+      filter(TimeHour >= input$time_range[1] & 
+             TimeHour <= input$time_range[2])
+  })
+  
+  output$trafficMap <- renderLeaflet({
+    leaflet() %>%
+      setView(lng = mean(st_bbox(zones_geojson)["xmin"] + st_bbox(zones_geojson)["xmax"]) / 2,
+              lat = mean(st_bbox(zones_geojson)["ymin"] + st_bbox(zones_geojson)["ymax"]) / 2,
+              zoom = 12) %>%
+      addProviderTiles("CartoDB.Positron") %>%
+      
+      # Tambahkan zona urbanisasi
+      addPolygons(
+        data = zones_traffic,
+        fillColor = ~colorBin("YlOrRd", AverageVolume, bins = 4)(AverageVolume),
+        color = "black",
+        weight = 1,
+        popup = ~paste("Zone:", Zone, "<br>", "Average Traffic Volume:", round(AverageVolume)),
+        fillOpacity = 0.7
+      ) %>%
+      
+      # Tambahkan legenda
+      addLegend(
+        "bottomright", 
+        pal = colorBin("YlOrRd", zones_traffic$AverageVolume, bins = 4),
+        values = zones_traffic$AverageVolume,
+        title = "Avg Traffic Volume",
+        opacity = 1
+      )
+  })
+  
+  output$trafficChart <- renderPlot({
+    ggplot(filtered_data(), aes(x = TimeHour, y = TrafficVolume, color = Zone)) +
+      geom_line(size = 1) +
+      geom_point(size = 2) +
+      labs(title = "Traffic Volume by Zone Over Time",
+           x = "Time (Hour)",
+           y = "Traffic Volume") +
+      theme_minimal()
+  })
+}
+
+# Jalankan aplikasi
+shinyApp(ui = ui, server = server)
+
+```
+
